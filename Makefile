@@ -1,8 +1,8 @@
 # Makefile for stone decoder
 #
 
-SIMPLE_INC	= simple
-SIMPLE_LIB      = simple
+SIMPLE_INC	= evioBlockParser
+SIMPLE_LIB      = evioBlockParser
 
 CODA		?= /daqfs/coda/3.10_devel
 
@@ -16,7 +16,7 @@ ROOTINC		= $(shell root-config --incdir)
 INCLUDES	= -I$(ROOTINC) -I$(EVIO_INC) -I$(SIMPLE_INC)
 CXXFLAGS	= -g -Wall -Wno-unused -std=c++11 $(INCLUDES)
 
-LIBS	        = $(ROOTLIBS) -L${SIMPLE_LIB} -lsimple
+LIBS	        = $(ROOTLIBS) -L${SIMPLE_LIB} -levioBlockParser
 GLIBS         	= $(ROOTGLIBS) -L/usr/lib64 -lX11
 
 ALL_LIBS	= -L${EVIO_LIB} -levio -levioxx -lexpat $(LIBS) $(GLIBS) $(ROOTLIBS)

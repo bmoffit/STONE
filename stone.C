@@ -14,7 +14,7 @@
 
 #include "evioFileChannel.hxx"
 #include "evioUtil.hxx"
-#include "simpleLib.h"
+#include "evioBlockParser.hxx"
 #include "SetParams.h"
 #include "SetTreeVars.h"
 #include "Fadc250Decode.h"
@@ -30,7 +30,7 @@ using namespace evio;
 #define LSWAP(x) bswap_32(x)
 void ClearScaler();
 void ClearTreeVar();
-bool verbose = true;
+bool verbose = false;
 Int_t scaldat[32]={0};
 
 int main ()
@@ -165,7 +165,8 @@ int main ()
 	while(chan->readAlloc(&buf, &bufLen))
 	  { /* read the event and allocate the correct size buffer */
 	    evioBlockParser dataBlock;
-	    dataBlock.SetDebugMask(0xffff &~ evioBlockParser::SHOW_NODE_FOUND);
+	    // dataBlock.SetDebugMask(0xffff &~ evioBlockParser::SHOW_NODE_FOUND);
+	    dataBlock.SetDebugMask(0);
 
 	    dataBlock.ClearMaps();
 	    dataBlock.Parse(buf);
@@ -186,7 +187,7 @@ int main ()
 
 
 
-	    unsigned long long *simpTrigBuf1 = NULL;
+	    uint64_t *simpTrigBuf1 = NULL;
 	    tbLen1 = dataBlock.GetTriggerBankTimestamp(&simpTrigBuf1);
 
 	    ULong64_t fevtNum = simpTrigBuf1[0];
@@ -198,7 +199,7 @@ int main ()
 	    if(verbose)printf("Event number for the first event in the block = %llu \n",fevtNum);
 
 	    unsigned short *simpTrigBuf2 = NULL;
-	    tbLen2 = dataBlock.GetTriggerBankEvType(&simTrigBuf2);
+	    tbLen2 = dataBlock.GetTriggerBankEvType(&simpTrigBuf2);
 
 	    unsigned int *simpTrigRocBuf1 = NULL;
 	    tbLenROC[0] = dataBlock.GetTriggerBankRocData(TI_ROC,&simpTrigRocBuf1); // TI ROC
@@ -215,10 +216,23 @@ int main ()
 	    if(check == -1)printf("Couldn't find block level !\n");
 	    if(verbose)printf("Block level = %d\n",blocklevel);
 
+
+	    uint32_t *bh_raw;
+	    int32_t bh_size = dataBlock.GetU32(VTP_ROC, VTP_BANK, &bh_raw);
+	    if(bh_size)
+	      {
+		vtpDataDecode(LSWAP(bh_raw[0]));
+	      }
+	    else
+	      {
+		cerr << "BROKEN" << endl;
+	      }
+
+
 	    uint8_t blk_size = 1;
 
 	    /* Parse VTP Bank */
-	    blk_size = p.ParseJlabBank(VTP_ROC, VTP_BANK);
+	    blk_size = dataBlock.ParseJLabBank(VTP_ROC, VTP_BANK, true);
 	    if(blk_size < 1)
 	      {
 		cerr << "Error Parsing VTP Bank" << endl;
@@ -226,16 +240,23 @@ int main ()
 	    else
 	      {
 		if(verbose)
-		  printf("VTP num of evts = %d\n", vtp_data.blk_size);
+		  printf("VTP block number = %d  num of evts = %d\n",
+			 vtp_data.blk_num, vtp_data.blk_size);
 
-		if(blk_size != blocklevel)
+		if(vtp_data.blk_size != blocklevel)
 		  printf("VTP block size %d is not equal to blocklevel %d !\n",
-			 blk_size, blocklevel);
+			 vtp_data.blk_size, blocklevel);
 
 	      }
 
 	    /* Parse FADC Bank */
-	    blk_size = p.ParseJlabBank(TI_ROC, FADC_BANK);
+	    bh_size = dataBlock.GetU32(TI_ROC, FADC_BANK, &bh_raw);
+	    if(bh_size)
+	      {
+		faDataDecode(bh_raw[0]);
+	      }
+
+	    blk_size = dataBlock.ParseJLabBank(TI_ROC, FADC_BANK, false);
 	    if(blk_size < 1)
 	      {
 		cerr << "Error Parsing FADC Bank" << endl;
@@ -243,13 +264,15 @@ int main ()
 	    else
 	      {
 		if(verbose)
-		  printf("FADC num of evts = %d\n", blk_size);
+		  printf("FADC block number = %d  num of evts = %d\n",
+			 fadc_data.blk_num, fadc_data.n_evts);
 
-		if(blk_size != blocklevel)
+		if(fadc_data.n_evts != blocklevel)
 		  printf("FADC block size %d is not equal to blocklevel %d !\n",
-			 blk_size, blocklevel);
+			 fadc_data.n_evts, blocklevel);
 
 	      }
+
 
 	    /**  loop over blocks **/
 	    for(int ii=0;ii<BLOCKLEVEL;ii++){
@@ -275,7 +298,7 @@ int main ()
 	      unsigned int *simpDataBuf = NULL;
 	      int simpLen=0;
 	      /** FADC event data **/
-	      simpLen = p.GetU32(TI_ROC, FADC_BANK, FADC_SLOT, ii, &simpDataBuf);
+	      simpLen = dataBlock.GetU32(TI_ROC, FADC_BANK, FADC_SLOT, ii, &simpDataBuf);
 	      if(simpLen <= 0)
 		printf("ERROR fadc event data length %d <= 0 \n",simpLen);
 	      else{
@@ -308,7 +331,7 @@ int main ()
 	      /**  VTP event data **/
 	      simpLen = 0;
 	      simpDataBuf = NULL;
-	      simpLen = p.GetU32(VTP_ROC, VTP_BANK, VTP_SLOT, ii, &simpDataBuf);
+	      simpLen = dataBlock.GetU32(VTP_ROC, VTP_BANK, VTP_SLOT, ii, &simpDataBuf);
 	      if(simpLen <= 0)
 		printf("ERROR vtp event data length %d <= 0 \n",simpLen);
 	      else{
