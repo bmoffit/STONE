@@ -4,6 +4,8 @@
 SIMPLE_INC	= simple
 SIMPLE_LIB      = simple
 
+CODA		?= /daqfs/coda/3.10_devel
+
 EVIO_INC	?= $(CODA)/Linux-x86_64/include
 EVIO_LIB	?= $(CODA)/Linux-x86_64/lib
 
@@ -12,12 +14,12 @@ ROOTGLIBS	= $(shell root-config --glibs)
 ROOTINC		= $(shell root-config --incdir)
 
 INCLUDES	= -I$(ROOTINC) -I$(EVIO_INC) -I$(SIMPLE_INC)
-CXXFLAGS	= -g -Wall -std=c++11 $(INCLUDES)
+CXXFLAGS	= -g -Wall -Wno-unused -std=c++11 $(INCLUDES)
 
 LIBS	        = $(ROOTLIBS) -L${SIMPLE_LIB} -lsimple
 GLIBS         	= $(ROOTGLIBS) -L/usr/lib64 -lX11
 
-ALL_LIBS	= -L${EVIO_LIB} -levio $(LIBS) $(GLIBS) $(ROOTLIBS)
+ALL_LIBS	= -L${EVIO_LIB} -levio -levioxx -lexpat $(LIBS) $(GLIBS) $(ROOTLIBS)
 
 SRC		= stone.C
 HEAD		= $(SRC:.C=.h)
