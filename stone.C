@@ -128,6 +128,7 @@ int main ()
     cout << "Open file " << datapath;
     ndatafile++;
 
+#ifdef SKIP
     // Unblocking initialize
     // SIMPLE: initialize
     simpleInit();
@@ -157,222 +158,207 @@ int main ()
      */
     simpleConfigBank(1, 0x3, 0, 0, 1, NULL);
     simpleConfigBank(3, 0x56, 0, 1, 1, NULL);
+#endif
 
     try
       {
 	while(chan->readAlloc(&buf, &bufLen))
 	  { /* read the event and allocate the correct size buffer */
-	    indx=0; pe=0;
-	    nWords = buf[0] + 1;
-	    bt  = ((buf[1]&0xffff0000)>>16);  /* Bank Tag */
-	    dt  = ((buf[1]&0xff00)>>8);       /* Data Type */
-	    blk = buf[1]&0xff;                /* Event Block size */
+	    evioBlockParser dataBlock;
+	    dataBlock.SetDebugMask(0xffff &~ evioBlockParser::SHOW_NODE_FOUND);
 
-	    if(verbose) printf("    BLOCK #%llu,  Bank tag = 0x%04x, Data type = 0x%04x,  Total len = %d words\n", nevents, bt, dt, nWords);
+	    dataBlock.ClearMaps();
+	    dataBlock.Parse(buf);
 
-	    /* Check on what type of event block this is */
-	    if((bt >= 0xff00)> 0)
-	      {/* CODA Reserved bank type */
-		switch (bt) {
-		case 0xffd1:
-		  if(verbose) printf("    ** Prestart Event **\n");
-		  break;
-		case 0xffd2:
-		  if(verbose) printf("    ** Go Event **\n");
-		  break;
-		case 0xffd4:
-		  if(verbose) printf("    ** End Event **\n");
-		  break;
-		case 0xff50:
-		case 0xff58:
-		case 0xff70:
-		  if(verbose) printf("    ** Physics Event Block (%d events in Block) **\n",blk);
-		  pe=1;
-		  break;
-		default:
-		  if(verbose) printf("    ** Undefined CODA Event Type **\n");
-		}
-	      }
-	    else
-	      { /* User event type */
-		printf("    ** User Event (Type = %d) **\n",bt);
-	      }
+	    /* Physics events have a trigger bank,
+	       skip events without trigger banks */
+	    uint16_t evtag; int32_t evtag_len;
+	    evtag_len = dataBlock.GetTriggerBankEvTag(&evtag);
+	    if(evtag_len == -1)
+	      continue;
 
-	    if (pe == 0)
+	    /* This is a built Physics Event. Disect a bit more... */
+
+	    /**  Get trigger bank buf **/
+	    int tbLen1 = 0; // trigger bank time segment
+	    int tbLen2 = 0; // trigger bank type segment
+	    int tbLenROC[2] = {0}; // trigger bank ROC segment
+
+
+
+	    unsigned long long *simpTrigBuf1 = NULL;
+	    tbLen1 = dataBlock.GetTriggerBankTimestamp(&simpTrigBuf1);
+
+	    ULong64_t fevtNum = simpTrigBuf1[0];
+	    if(fevtNum != nevents){
+	      printf("The event number %llu from TI does not match the counter %llu !\n",fevtNum,nevents);
+	      break;
+	    }
+
+	    if(verbose)printf("Event number for the first event in the block = %llu \n",fevtNum);
+
+	    unsigned short *simpTrigBuf2 = NULL;
+	    tbLen2 = dataBlock.GetTriggerBankEvType(&simTrigBuf2);
+
+	    unsigned int *simpTrigRocBuf1 = NULL;
+	    tbLenROC[0] = dataBlock.GetTriggerBankRocData(TI_ROC,&simpTrigRocBuf1); // TI ROC
+
+	    unsigned int *simpTrigRocBuf2 = NULL;
+	    tbLenROC[1] = dataBlock.GetTriggerBankRocData(VTP_ROC,&simpTrigRocBuf2); // VTP ROC
+
+	    if(verbose)printf("time len = %d , type len = %d , roc1 len = %d , roc2 len = %d\n",tbLen1,tbLen2,tbLenROC[0],tbLenROC[1]);
+
+	    // Block level is the length of the trigger time (-1 for event number)
+	    // and trigger type segments
+	    int BLOCKLEVEL=1;
+	    check = blocklevel = BLOCKLEVEL = tbLen2;
+	    if(check == -1)printf("Couldn't find block level !\n");
+	    if(verbose)printf("Block level = %d\n",blocklevel);
+
+	    uint8_t blk_size = 1;
+
+	    /* Parse VTP Bank */
+	    blk_size = p.ParseJlabBank(VTP_ROC, VTP_BANK);
+	    if(blk_size < 1)
 	      {
-		indx += nWords;
+		cerr << "Error Parsing VTP Bank" << endl;
 	      }
 	    else
-	      { /* This is a built Physics Event. Disect a bit more... */
+	      {
+		if(verbose)
+		  printf("VTP num of evts = %d\n", vtp_data.blk_size);
 
-		/**  Scan data to find blocks and banks **/
-		simpleScan(buf, nWords);
+		if(blk_size != blocklevel)
+		  printf("VTP block size %d is not equal to blocklevel %d !\n",
+			 blk_size, blocklevel);
 
-		indx += 2;
-
-		/**  Get trigger bank buf **/
-		int tbLen1 = 0; // trigger bank time segment
-		int tbLen2 = 0; // trigger bank type segment
-		int tbLenROC[2] = {0}; // trigger bank ROC segment
-
-		unsigned long long *simpTrigBuf1 = NULL;
-		tbLen1 = simpleGetTriggerBankTimeSegment(&simpTrigBuf1);
-		ULong64_t fevtNum = simpTrigBuf1[0];
-		if(fevtNum != nevents){
-		  printf("The event number %llu from TI does not match the counter %llu !\n",fevtNum,nevents);
-		  break;
-		}
-
-		if(verbose)printf("Event number for the first event in the block = %llu \n",fevtNum);
-
-		unsigned short *simpTrigBuf2 = NULL;
-		tbLen2 = simpleGetTriggerBankTypeSegment(&simpTrigBuf2);
-
-		unsigned int *simpTrigRocBuf1 = NULL;
-		tbLenROC[0] = simpleGetTriggerBankRocSegment(TI_ROC,&simpTrigRocBuf1); // TI ROC
-
-		unsigned int *simpTrigRocBuf2 = NULL;
-		tbLenROC[1] = simpleGetTriggerBankRocSegment(VTP_ROC,&simpTrigRocBuf2); // VTP ROC
-
-		if(verbose)printf("time len = %d , type len = %d , roc1 len = %d , roc2 len = %d\n",tbLen1,tbLen2,tbLenROC[0],tbLenROC[1]);
-
-		int BLOCKLEVEL=1;
-		check = simpleGetRocBlockLevel(TI_ROC, FADC_BANK, &BLOCKLEVEL);
-		blocklevel = BLOCKLEVEL;
-		if(check == -1)printf("Couldn't find block level !\n");
-		if(verbose)printf("Block level = %d\n",blocklevel);
-
-		unsigned int header = 0;
-		/** VTP block header **/
-		check = simpleGetSlotBlockHeader(VTP_ROC, VTP_BANK, VTP_SLOT, &header);
-		if(check <= 0)
-		  printf("ERROR getting VTP block header\n");
-		else{
-		  vtpDataDecode(LSWAP(header));
-		  if(verbose)printf("VTP evt blk = %d, num of evts = %d\n",vtp_data.blk_num, vtp_data.blk_size);
-		  if(vtp_data.blk_size != blocklevel)
-		    printf("VTP block size %d is not equal to blocklevel %d !\n",vtp_data.blk_size, blocklevel);
-		}
-
-		/* FADC block header */
-		check = simpleGetSlotBlockHeader(TI_ROC, FADC_BANK, FADC_SLOT, &header);
-		if(check <= 0)
-		  printf("ERROR getting FADC block header\n");
-		else{
-		  faDataDecode(header);
-		  if(verbose)printf("FADC evt blk = %d, num of evts = %d\n",fadc_data.blk_num, fadc_data.n_evts);
-		  if(fadc_data.n_evts != blocklevel)
-		    printf("ERROR fadc number of events %d is not equal to blocklevel %d !\n",fadc_data.n_evts, blocklevel);
-		}
-
-		/**  loop blocks **/
-		for(int ii=0;ii<BLOCKLEVEL;ii++){
-		  ClearTreeVar();
-		  if(firstevent)fadc_mode=-1;
-
-		  if(nevents>totalmax && totalmax != 1){
-		    totaldone = true;
-		    break;
-		  }
-		  if(nevents%1000000==0) printf("  Event number = %llu **\n",nevents);
-
-		  ti_timestamp = simpTrigBuf1[ii+1];
-		  evtype = simpTrigBuf2[ii];
-		  unsigned int tmpdata;
-		  tmpdata = simpTrigRocBuf1[ii*3+2];
-		  if((tmpdata & 0xffff0000)== 0xda560000){
-		    tMPS = (tmpdata & 0x10)>>4;
-		  }
-		  else
-		    printf("Couldn't find helicity bits !!\n");
-
-		  unsigned int *simpDataBuf = NULL;
-		  int simpLen=0;
-		  /** FADC event data **/
-		  simpLen = simpleGetSlotEventData(TI_ROC, FADC_BANK, FADC_SLOT, ii, &simpDataBuf);
-		  if(simpLen <= 0)
-		    printf("ERROR fadc event data length %d <= 0 \n",simpLen);
-		  else{
-		    for(int idata = 0; idata < simpLen; idata++)
-		      faDataDecode(simpDataBuf[idata]);
-
-		    if(firstevent){
-		      fadc_mode = GetFadcMode();
-		      if(fadc_mode == RAW_MODE)
-			T->Branch("fadc_rawADC", frawdata, Form("frawdata[%i][%i]/I",FADC_NCHAN,MAXRAW));
-
-		      fadc_scal_pretime=0;
-		      for(int kk=0; kk<16; kk++) fadc_scal_precnt[kk]=0;
-		    }
-
-		    if(fadc_scal_update==1){
-		      Double_t delta_t = (fadc_scal_time-fadc_scal_pretime)*2048.0*1e-9;  // s
-		      if(delta_t<=0) printf("ERROR: FADC scaler timer is not updated\n");
-
-		      for(int kk=0; kk<16; kk++){
-			Double_t delta_cnt = 1.0*( fadc_scal_cnt[kk]-fadc_scal_precnt[kk] );
-			if(delta_t>0) fadc_scal_rate[kk]=delta_cnt/delta_t;
-
-			fadc_scal_precnt[kk] = fadc_scal_cnt[kk];
-		      }
-		      fadc_scal_pretime = fadc_scal_time;
-		    }
-		  }
-
-		  /**  VTP event data **/
-		  simpLen = 0;
-		  simpDataBuf = NULL;
-		  simpLen = simpleGetSlotEventData(VTP_ROC, VTP_BANK, VTP_SLOT, ii, &simpDataBuf);
-		  if(simpLen <= 0)
-		    printf("ERROR vtp event data length %d <= 0 \n",simpLen);
-		  else{
-		    for(int idata = 0; idata < simpLen; idata++){
-		      unsigned int new_data;
-		      new_data = LSWAP(simpDataBuf[idata]);
-		      vtpDataDecode(new_data);
-		    }
-		    for(int mm=0;mm<6;mm++)
-		      vtp_past_hel[mm] = vtp_data.helicity[mm];
-
-		    for(int mm=0;mm<NCLUST;mm++){
-		      clust_x[mm] = vtp_data.clust_x[mm];
-		      clust_y[mm] = vtp_data.clust_y[mm];
-		      clust_e[mm] = vtp_data.clust_e[mm];
-		      clust_n[mm] = vtp_data.clust_n[mm];
-		      clust_t[mm] = vtp_data.clust_t[mm];
-		    }
-
-		    //vtp_helicity = InvertBit((vtp_past_hel[0] & 0x1));   // most recent helicity seen by VTP
-		    vtp_helicity = (vtp_past_hel[0] & 0x1);   // most recent helicity seen by VTP
-		  }
-
-		  T->Fill();
-		  VTP->Fill();
-		  nevents++;
-
-		  if(firstevent) firstevent = false;
-
-		  if(eventbyevent) {
-		    printf("Hit return for next event or q to exit; hit a or A to replay all events or certain number of events.\n");
-		    int typein = getchar();
-		    if(typein == 113){ totaldone= true; break;}
-		    if(typein == 65 || typein == 97){
-		      eventbyevent=false;
-		      cout<<"How many events? (hit 1 for total;)";
-		      cin>>totalmax;
-		    }
-		  }
-
-		  if(nevents > maxevents) {
-		    printf("Completed %llu events!\n", nevents-1);
-		    totaldone=true;
-		    break;
-		  }
-		} // loop over block levels
-
-
-		if(totaldone) break;
 	      }
+
+	    /* Parse FADC Bank */
+	    blk_size = p.ParseJlabBank(TI_ROC, FADC_BANK);
+	    if(blk_size < 1)
+	      {
+		cerr << "Error Parsing FADC Bank" << endl;
+	      }
+	    else
+	      {
+		if(verbose)
+		  printf("FADC num of evts = %d\n", blk_size);
+
+		if(blk_size != blocklevel)
+		  printf("FADC block size %d is not equal to blocklevel %d !\n",
+			 blk_size, blocklevel);
+
+	      }
+
+	    /**  loop over blocks **/
+	    for(int ii=0;ii<BLOCKLEVEL;ii++){
+	      ClearTreeVar();
+	      if(firstevent)fadc_mode=-1;
+
+	      if(nevents>totalmax && totalmax != 1){
+		totaldone = true;
+		break;
+	      }
+	      if(nevents%1000000==0) printf("  Event number = %llu **\n",nevents);
+
+	      ti_timestamp = simpTrigBuf1[ii+1];
+	      evtype = simpTrigBuf2[ii];
+	      unsigned int tmpdata;
+	      tmpdata = simpTrigRocBuf1[ii*3+2];
+	      if((tmpdata & 0xffff0000)== 0xda560000){
+		tMPS = (tmpdata & 0x10)>>4;
+	      }
+	      else
+		printf("Couldn't find helicity bits !!\n");
+
+	      unsigned int *simpDataBuf = NULL;
+	      int simpLen=0;
+	      /** FADC event data **/
+	      simpLen = p.GetU32(TI_ROC, FADC_BANK, FADC_SLOT, ii, &simpDataBuf);
+	      if(simpLen <= 0)
+		printf("ERROR fadc event data length %d <= 0 \n",simpLen);
+	      else{
+		for(int idata = 0; idata < simpLen; idata++)
+		  faDataDecode(simpDataBuf[idata]);
+
+		if(firstevent){
+		  fadc_mode = GetFadcMode();
+		  if(fadc_mode == RAW_MODE)
+		    T->Branch("fadc_rawADC", frawdata, Form("frawdata[%i][%i]/I",FADC_NCHAN,MAXRAW));
+
+		  fadc_scal_pretime=0;
+		  for(int kk=0; kk<16; kk++) fadc_scal_precnt[kk]=0;
+		}
+
+		if(fadc_scal_update==1){
+		  Double_t delta_t = (fadc_scal_time-fadc_scal_pretime)*2048.0*1e-9;  // s
+		  if(delta_t<=0) printf("ERROR: FADC scaler timer is not updated\n");
+
+		  for(int kk=0; kk<16; kk++){
+		    Double_t delta_cnt = 1.0*( fadc_scal_cnt[kk]-fadc_scal_precnt[kk] );
+		    if(delta_t>0) fadc_scal_rate[kk]=delta_cnt/delta_t;
+
+		    fadc_scal_precnt[kk] = fadc_scal_cnt[kk];
+		  }
+		  fadc_scal_pretime = fadc_scal_time;
+		}
+	      }
+
+	      /**  VTP event data **/
+	      simpLen = 0;
+	      simpDataBuf = NULL;
+	      simpLen = p.GetU32(VTP_ROC, VTP_BANK, VTP_SLOT, ii, &simpDataBuf);
+	      if(simpLen <= 0)
+		printf("ERROR vtp event data length %d <= 0 \n",simpLen);
+	      else{
+		for(int idata = 0; idata < simpLen; idata++){
+		  unsigned int new_data;
+		  new_data = LSWAP(simpDataBuf[idata]);
+		  vtpDataDecode(new_data);
+		}
+		for(int mm=0;mm<6;mm++)
+		  vtp_past_hel[mm] = vtp_data.helicity[mm];
+
+		for(int mm=0;mm<NCLUST;mm++){
+		  clust_x[mm] = vtp_data.clust_x[mm];
+		  clust_y[mm] = vtp_data.clust_y[mm];
+		  clust_e[mm] = vtp_data.clust_e[mm];
+		  clust_n[mm] = vtp_data.clust_n[mm];
+		  clust_t[mm] = vtp_data.clust_t[mm];
+		}
+
+		//vtp_helicity = InvertBit((vtp_past_hel[0] & 0x1));   // most recent helicity seen by VTP
+		vtp_helicity = (vtp_past_hel[0] & 0x1);   // most recent helicity seen by VTP
+	      }
+
+	      T->Fill();
+	      VTP->Fill();
+	      nevents++;
+
+	      if(firstevent) firstevent = false;
+
+	      if(eventbyevent) {
+		printf("Hit return for next event or q to exit; hit a or A to replay all events or certain number of events.\n");
+		int typein = getchar();
+		if(typein == 113){ totaldone= true; break;}
+		if(typein == 65 || typein == 97){
+		  eventbyevent=false;
+		  cout<<"How many events? (hit 1 for total;)";
+		  cin>>totalmax;
+		}
+	      }
+
+	      if(nevents > maxevents) {
+		printf("Completed %llu events!\n", nevents-1);
+		totaldone=true;
+		break;
+	      }
+	    } // loop over block levels
+
+
+	    if(totaldone) break;
+
 
 	  } // End of loop one data file
 
